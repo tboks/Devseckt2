@@ -1,0 +1,226 @@
+name: "05 - Публикация в Docker Hub"
+
+on:
+  pull_request:
+    branches: [main, master,dev]
+    types: [closed]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  docker-build-push:
+    name: "🐳 Build and Push Docker Image"
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.merged == true
+    outputs:
+      version: ${{ steps.get_version.outputs.version }}
+      image_name: ${{ env.IMAGE_NAME }}
+      push_status: ${{ steps.push_check.outputs.status }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: "📋 Получение версии"
+        id: get_version
+        run: |
+          echo "═══════════════════════════════════════════"
+          echo "🐳 ПУБЛИКАЦИЯ В DOCKER HUB"
+          echo "═══════════════════════════════════════════"
+          
+          if [ -f VERSION ]; then
+            VERSION=$(cat VERSION)
+            echo "✅ Версия из VERSION файла: v$VERSION"
+          else
+            VERSION="0.1.0"
+            echo "⚠️ VERSION файл не найден, используем v$VERSION"
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: "🔧 Определение имени образа"
+        run: |
+          REPO_NAME=$(basename ${{ github.repository }})
+          IMAGE_NAME="${{ github.repository_owner }}/${REPO_NAME}"
+          echo "IMAGE_NAME=$IMAGE_NAME" >> $GITHUB_ENV
+          echo "📦 Имя образа: $IMAGE_NAME"
+          
+          echo "📋 Информация для Docker Hub:"
+          echo "   • Репозиторий: $IMAGE_NAME"
+          echo "   • Тег версии: v${{ steps.get_version.outputs.version }}"
+          echo "   • Тег latest: latest"
+
+      - name: "🔑 Login to Docker Hub"
+        id: login
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: "✅ Проверка авторизации"
+        run: |
+          echo "═══════════════════════════════════════════"
+          echo "🔑 ПРОВЕРКА ДОСТУПА К DOCKER HUB"
+          echo "═══════════════════════════════════════════"
+          
+          echo "👤 Пользователь: ${{ secrets.DOCKERHUB_USERNAME }}"
+          
+          # Проверяем существование репозитория
+          echo ""
+          echo "🔍 Проверка репозитория ${{ env.IMAGE_NAME }}..."
+          
+          # Пытаемся получить информацию о репозитории
+          if docker manifest inspect ${{ env.IMAGE_NAME }}:latest > /dev/null 2>&1; then
+            echo "✅ Репозиторий существует и доступен"
+            echo "REPO_EXISTS=true" >> $GITHUB_ENV
+          else
+            echo "❌ Репозиторий НЕ существует или нет доступа"
+            echo "REPO_EXISTS=false" >> $GITHUB_ENV
+            echo ""
+            echo "📝 ИНСТРУКЦИЯ ПО СОЗДАНИЮ РЕПОЗИТОРИЯ:"
+            echo "────────────────────────────────────────"
+            echo "1. Перейдите по ссылке: https://hub.docker.com/repository/create"
+            echo "2. Заполните поля:"
+            echo "   • Название: github-cicd-template-mainq"
+            echo "   • Видимость: Public"
+            echo "   • Описание: CI/CD Template for GitHub Actions"
+            echo "3. Нажмите 'Create'"
+            echo "────────────────────────────────────────"
+            echo ""
+            echo "⚠️ После создания репозитория, перезапустите этот workflow"
+          fi
+
+      - name: "🏗️ Build Docker image"
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: false
+          tags: |
+            ${{ env.IMAGE_NAME }}:v${{ steps.get_version.outputs.version }}
+            ${{ env.IMAGE_NAME }}:latest
+          load: true
+
+      - name: "📦 Проверка собранного образа"
+        run: |
+          echo "═══════════════════════════════════════════"
+          echo "📦 ИНФОРМАЦИЯ О СОБРАННОМ ОБРАЗЕ"
+          echo "═══════════════════════════════════════════"
+          
+          docker images ${{ env.IMAGE_NAME }}
+          
+          echo ""
+          echo "📋 Размер образа:"
+          docker image ls ${{ env.IMAGE_NAME }}:v${{ steps.get_version.outputs.version }} --format "table {{.Repository}}:{{.Tag}}\t{{.Size}}"
+
+      - name: "🚀 Push to Docker Hub"
+        id: push
+        if: env.REPO_EXISTS == 'true'
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.IMAGE_NAME }}:v${{ steps.get_version.outputs.version }}
+            ${{ env.IMAGE_NAME }}:latest
+
+      - name: "📊 Результат публикации"
+        id: push_check
+        run: |
+          if [ "${{ env.REPO_EXISTS }}" == "true" ] && [ "${{ steps.push.outcome }}" == "success" ]; then
+            echo "status=success" >> $GITHUB_OUTPUT
+            echo "═══════════════════════════════════════════"
+            echo "✅ ОБРАЗ УСПЕШНО ОПУБЛИКОВАН"
+            echo "═══════════════════════════════════════════"
+            echo "📦 Репозиторий: ${{ env.IMAGE_NAME }}"
+            echo "🏷️ Теги:"
+            echo "  • v${{ steps.get_version.outputs.version }}"
+            echo "  • latest"
+            echo ""
+            echo "🔗 Ссылка: https://hub.docker.com/r/${{ env.IMAGE_NAME }}"
+            echo ""
+            echo "📋 Команда для скачивания:"
+            echo "  docker pull ${{ env.IMAGE_NAME }}:v${{ steps.get_version.outputs.version }}"
+          else
+            echo "status=failed" >> $GITHUB_OUTPUT
+            echo "═══════════════════════════════════════════"
+            echo "❌ ПУБЛИКАЦИЯ НЕ УДАЛАСЬ"
+            echo "═══════════════════════════════════════════"
+            echo "📋 Причина: Репозиторий не существует в Docker Hub"
+            echo ""
+            echo "📝 ЧТО НУЖНО СДЕЛАТЬ:"
+            echo "────────────────────────"
+            echo "1. Перейдите в Docker Hub: https://hub.docker.com/"
+            echo "2. Создайте репозиторий с именем: github-cicd-template-mainq"
+            echo "3. Убедитесь, что репозиторий Public"
+            echo "4. После создания, этот workflow будет работать автоматически"
+            echo "────────────────────────"
+          fi
+          echo "═══════════════════════════════════════════"
+
+  add-docker-label:
+    name: "🏷️ Добавление label dockerhub"
+    needs: docker-build-push
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: "➕ Добавление метки"
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const labelName = 'dockerhub';
+            const pushStatus = '${{ needs.docker-build-push.outputs.push_status }}';
+            const version = '${{ needs.docker-build-push.outputs.version }}';
+            const imageName = '${{ needs.docker-build-push.outputs.image_name }}';
+            
+            console.log('═══════════════════════════════════════════');
+            console.log('🏷️ ДОБАВЛЕНИЕ МЕТКИ DOCKERHUB');
+            console.log('═══════════════════════════════════════════');
+            console.log(`📦 Версия: v${version}`);
+            console.log(`🚀 Статус публикации: ${pushStatus}`);
+            
+            try {
+              // Проверяем/создаём метку
+              await github.rest.issues.getLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                name: labelName
+              }).catch(async () => {
+                console.log('🆕 Создание метки dockerhub...');
+                await github.rest.issues.createLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name: labelName,
+                  color: '0e8a16',
+                  description: '🐳 Опубликовано в Docker Hub'
+                });
+              });
+              
+              // Добавляем метку к PR
+              await github.rest.issues.addLabels({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                labels: [labelName]
+              });
+              
+              console.log(`✅ Метка ${labelName} добавлена!`);
+              
+              if (pushStatus === 'success') {
+                console.log(`\n📦 Образ успешно опубликован в Docker Hub!`);
+                console.log(`🔗 https://hub.docker.com/r/${imageName}`);
+              } else {
+                console.log(`\n⚠️ Метка добавлена, но образ НЕ опубликован.`);
+                console.log(`📝 Причина: Репозиторий не существует в Docker Hub`);
+                console.log(`\n🔧 Чтобы исправить:`);
+                console.log(`1. Создайте репозиторий: https://hub.docker.com/repository/create`);
+                console.log(`2. Название: github-cicd-template-mainq`);
+                console.log(`3. Видимость: Public`);
+              }
+              
+            } catch (error) {
+              console.log(`⚠️ Ошибка при добавлении метки: ${error.message}`);
+            }

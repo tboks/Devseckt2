@@ -1,0 +1,106 @@
+name: "06 - Уведомление в Telegram"
+
+# ВАЖНО: Триггер должен точно совпадать с именем предыдущего workflow
+on:
+  workflow_run:
+    workflows: ["05 - Публикация в Docker Hub"]  # ТОЧНОЕ имя как в 05 файле
+    types:
+      - completed
+    branches:
+      - main
+      - master
+      - dev
+# Добавляем права на чтение
+permissions:
+  contents: read
+  actions: read
+  pull-requests: read
+
+jobs:
+  check-previous-status:
+    name: "🔍 Проверка статуса"
+    runs-on: ubuntu-latest
+    steps:
+      - name: "📊 Проверка предыдущего workflow"
+        run: |
+          echo "═══════════════════════════════════════════"
+          echo "🔍 ПРОВЕРКА ПРЕДЫДУЩЕГО WORKFLOW"
+          echo "═══════════════════════════════════════════"
+          echo "📋 Информация о запуске:"
+          echo "  • Workflow: ${{ github.event.workflow_run.name }}"
+          echo "  • Статус: ${{ github.event.workflow_run.conclusion }}"
+          echo "  • Ветка: ${{ github.event.workflow_run.head_branch }}"
+          echo "  • Commit: ${{ github.event.workflow_run.head_sha }}"
+          
+          if [ "${{ github.event.workflow_run.conclusion }}" != "success" ]; then
+            echo "❌ Предыдущий workflow не успешен, останавливаемся"
+            exit 1
+          fi
+          echo "✅ Предыдущий workflow успешен, продолжаем"
+
+  telegram-notify:
+    name: "📱 Отправка в Telegram"
+    needs: check-previous-status
+    runs-on: ubuntu-latest
+    steps:
+      - name: "📋 Начало работы"
+        run: |
+          echo "═══════════════════════════════════════════"
+          echo "📱 ШАГ 6: УВЕДОМЛЕНИЕ В TELEGRAM"
+          echo "═══════════════════════════════════════════"
+          echo "✅ Предыдущий шаг (Docker) выполнен успешно"
+          
+      - uses: actions/checkout@v4
+      
+      - name: "📦 Получение версии"
+        id: version
+        run: |
+          if [ -f VERSION ]; then
+            VERSION=$(cat VERSION)
+            echo "✅ Версия из файла: v$VERSION"
+          else
+            VERSION="0.1.0"
+            echo "⚠️ Файл VERSION не найден, используем v$VERSION"
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          
+      - name: "🔍 Проверка секретов Telegram"
+        id: check_secrets
+        run: |
+          if [ -n "${{ secrets.TELEGRAM_CHAT_ID }}" ] && [ -n "${{ secrets.TELEGRAM_TOKEN }}" ]; then
+            echo "✅ Секреты Telegram настроены"
+            echo "has_secrets=true" >> $GITHUB_OUTPUT
+          else
+            echo "❌ Секреты Telegram НЕ настроены"
+            echo "has_secrets=false" >> $GITHUB_OUTPUT
+            echo ""
+            echo "📝 Для настройки Telegram нужно:"
+            echo "1. Создать бота у @BotFather"
+            echo "2. Получить TOKEN"
+            echo "3. Узнать CHAT_ID у @userinfobot"
+            echo "4. Добавить секреты в GitHub"
+          fi
+          
+      - name: "📤 Отправка уведомления"
+        if: steps.check_secrets.outputs.has_secrets == 'true'
+        uses: appleboy/telegram-action@master
+        with:
+          to: ${{ secrets.TELEGRAM_CHAT_ID }}
+          token: ${{ secrets.TELEGRAM_TOKEN }}
+          message: |
+            🎉 **Релиз v${{ steps.version.outputs.version }}**
+            
+            📦 **Проект:** ${{ github.repository }}
+            📊 **Статус:** ✅ Успешно
+            🔗 **Ссылка:** https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+            
+            #ci #cd #release
+          format: markdown
+          
+      - name: "✅ Завершение"
+        run: |
+          echo "═══════════════════════════════════════════"
+          echo "✅ ШАГ 6 ЗАВЕРШЕН"
+          echo "═══════════════════════════════════════════"
+          echo "📦 Версия: v${{ steps.version.outputs.version }}"
+          echo "📱 Уведомление: ${{ steps.check_secrets.outputs.has_secrets == 'true' && '✅ Отправлено' || '⚠️ Пропущено' }}"
